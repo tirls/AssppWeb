@@ -1,0 +1,31 @@
+name: Check deployed SAP service
+on:
+  push:
+    branches: [codex/verify-sap-wasm]
+    paths: [.github/workflows/check-deployment.yml]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check deployed version and public endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=https://assppweb.mvalwl.workers.dev
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 20 "$BASE/api/settings" -o /tmp/settings.json && jq -e '.buildCommit == "704f696153248a130a8c60f5e040d5a431bd4518"' /tmp/settings.json; then break; fi
+            sleep 5
+          done
+          jq -e '.buildCommit == "704f696153248a130a8c60f5e040d5a431bd4518"' /tmp/settings.json
+          curl -fsS --max-time 30 "$BASE/" >/dev/null
+          curl -fsS --max-time 30 "$BASE/api/bag?guid=001122334455" -o /tmp/bag.xml
+          grep -q authenticateAccount /tmp/bag.xml
+          curl -fsS --max-time 60 -H 'Accept-Encoding: gzip' -D /tmp/headers "$BASE/api/sap-assets/CoreFP" -o /tmp/CoreFP.gz
+          grep -qi 'content-encoding: gzip' /tmp/headers
+          gzip -dc /tmp/CoreFP.gz | sha256sum | grep '^97c899f2fb076bdf7f810fe00ceb335d4af85efab0f2de737ad0aedd991c8277 '
+          curl --http1.1 -sS --max-time 5 -D /tmp/wisp-headers -o /dev/null -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "$BASE/wisp/" || test "$?" = 28
+          grep -q '101 Switching Protocols' /tmp/wisp-headers
+          echo 'Deployed commit verified; homepage 200; bag 200; SAP gzip digest matches; Wisp 101.' >> "$GITHUB_STEP_SUMMARY"
