@@ -113,3 +113,22 @@ describe("apple/bag", () => {
     });
   });
 });
+
+it('preserves SAP signing endpoints alongside download recovery endpoints', async () => {
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: true,
+    text: async () => buildPlist({
+      authenticateAccount: 'https://auth.itunes.apple.com/auth/v1/native',
+      'sign-sap-setup': 'https://fpinit.itunes.apple.com/v1/signSapSetup/legacy',
+      'sign-sap-setup-cert': 'https://s.mzstatic.com/sap/setupCert.plist',
+      'sign-sap-version': '200',
+      redownloadProduct: 'https://downloaddispatch.itunes.apple.com/r/redownload',
+      updateProduct: 'https://downloaddispatch.itunes.apple.com/up/updateProduct',
+    }),
+  }));
+  const result = await fetchBag('001122334455');
+  expect(result.sapEndpoints?.version).toBe(200);
+  expect(result.authURL).toBe('https://auth.itunes.apple.com/auth/v1/native/fast/');
+  expect(result.redownloadURL).toContain('/r/redownload');
+  expect(result.updateURL).toContain('/up/updateProduct');
+});
