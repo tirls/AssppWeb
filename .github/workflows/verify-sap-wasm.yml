@@ -1,0 +1,61 @@
+name: Verify SAP WASM
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/verify-sap-wasm]
+    paths: [.github/workflows/verify-sap-wasm.yml]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Fetch reviewed AssppWeb source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: Lakr233/AssppWeb
+          ref: 835a54dd773caeaa6ad6b342d5cde1bf3e6ceb29
+          persist-credentials: false
+      - name: Preserve originals and pin build inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p verification/original verification/rebuilt
+          cp frontend/src/apple/sap/vendor/unicorn.{mjs,wasm} verification/original/
+          ROOT=frontend/scripts/unicorn-wasm-patch
+          git clone --depth 1 --branch 2.1.4 https://github.com/unicorn-engine/unicorn.git "$ROOT/unicorn-src"
+          test "$(git -C "$ROOT/unicorn-src" rev-parse HEAD)" = 8028ec436f2d9376525352dd38ed9ed6b9f6be10
+          sed -i 's|emscripten/emsdk:3.1.61|emscripten/emsdk@sha256:30aa9fed39cc7810cc4338c77828bd513a6ee6b60c6b141bc6d9760aea5791e3|' "$ROOT/build.sh"
+          printf '%s\n' 'AssppWeb: 835a54dd773caeaa6ad6b342d5cde1bf3e6ceb29' 'Unicorn: 8028ec436f2d9376525352dd38ed9ed6b9f6be10' 'emsdk: sha256:30aa9fed39cc7810cc4338c77828bd513a6ee6b60c6b141bc6d9760aea5791e3' > verification/inputs.txt
+      - name: Rebuild from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash frontend/scripts/unicorn-wasm-patch/build.sh 2>&1 | tee verification/build.log
+          cp frontend/src/apple/sap/vendor/unicorn.{mjs,wasm} verification/rebuilt/
+      - name: Compare both binary and JavaScript glue
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum verification/original/* verification/rebuilt/* | tee verification/SHA256SUMS.txt
+          status=0
+          for name in unicorn.wasm unicorn.mjs; do
+            if cmp -s "verification/original/$name" "verification/rebuilt/$name"; then
+              echo "$name: byte-for-byte MATCH" | tee -a verification/comparison.txt
+            else
+              echo "$name: DIFFERENT; investigate before deployment" | tee -a verification/comparison.txt
+              status=1
+            fi
+          done
+          cat verification/comparison.txt >> "$GITHUB_STEP_SUMMARY"
+          echo 'Reproducibility establishes source correspondence, not absence of vulnerabilities.' >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - name: Save verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: sap-wasm-verification
+          path: verification/
+          retention-days: 14
+          if-no-files-found: error
