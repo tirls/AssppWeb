@@ -1,0 +1,50 @@
+name: Build SAP login fix
+on:
+  push:
+    branches: [codex/sap-login-fix]
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Test and compile
+        run: |
+          set -euo pipefail
+          npm ci --prefix backend
+          npm test --prefix backend
+          npm run build --prefix backend
+          npm ci --prefix frontend
+          npm test --prefix frontend
+          npm run build --prefix frontend
+      - name: Build Linux image with prebaked SAP assets
+        run: |
+          docker build --platform linux/amd64 --build-arg BUILD_COMMIT="$GITHUB_SHA" --build-arg BUILD_DATE="$(date -u +%FT%TZ)" -t "ghcr.io/tirls/assppweb:sap-$GITHUB_SHA" .
+      - name: Smoke test container
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/tirls/assppweb:sap-$GITHUB_SHA"
+          docker run -d --name sap-smoke -p 127.0.0.1:18080:8080 "$IMAGE"
+          trap 'docker logs sap-smoke; docker rm -f sap-smoke' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/api/settings >/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:18080/ >/dev/null
+          curl -fsS -H 'Accept-Encoding: gzip' -D /tmp/sap-headers http://127.0.0.1:18080/api/sap-assets/CoreFP -o /tmp/CoreFP.gz
+          grep -qi 'content-encoding: gzip' /tmp/sap-headers
+          gzip -dc /tmp/CoreFP.gz | sha256sum | grep '^97c899f2fb076bdf7f810fe00ceb335d4af85efab0f2de737ad0aedd991c8277 '
+      - name: Publish tested image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "ghcr.io/tirls/assppweb:sap-$GITHUB_SHA"
+          echo "Image: ghcr.io/tirls/assppweb:sap-$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"

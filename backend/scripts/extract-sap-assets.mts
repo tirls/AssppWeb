@@ -3,25 +3,29 @@
 // digests, strips fat binaries to their x86_64 slices, and writes the four
 // files into OUT_DIR so the runtime image can ship them prebaked.
 
-import { mkdir, copyFile } from "node:fs/promises";
-import path from "node:path";
+import { mkdir, copyFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { gzip } from 'node:zlib';
+
+const compress = promisify(gzip);
 
 const outDir = process.argv[2];
 
 if (!outDir) {
-  console.error("usage: DATA_DIR=<workdir> tsx scripts/extract-sap-assets.mts <out-dir>");
+  console.error('usage: DATA_DIR=<workdir> tsx scripts/extract-sap-assets.mts <out-dir>');
   process.exit(1);
 }
 
 if (!process.env.DATA_DIR) {
-  console.error("DATA_DIR must be set (config.ts reads it at import time)");
+  console.error('DATA_DIR must be set (config.ts reads it at import time)');
   process.exit(1);
 }
 
 // Imported after the DATA_DIR guard: the config module captures the env at
 // import time, so a default assigned here would arrive too late.
 const { ensureSapAssets, readCachedAsset, SAP_ASSET_SPECS } = await import(
-  "../src/services/sapAssets.ts"
+  '../src/services/sapAssets.ts'
 );
 
 await ensureSapAssets();
@@ -33,9 +37,10 @@ for (const spec of SAP_ASSET_SPECS) {
     throw new Error(`asset ${spec.name} missing after extraction`);
   }
   await copyFile(
-    path.join(process.env.DATA_DIR, "sap-assets", spec.name),
+    path.join(process.env.DATA_DIR, 'sap-assets', spec.name),
     path.join(outDir, spec.name),
   );
+  await writeFile(path.join(outDir, `${spec.name}.gz`), await compress(data, { level: 9 }));
   console.log(`${spec.name}: ${data.length} bytes`);
 }
 
